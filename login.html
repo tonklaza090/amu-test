@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sensor Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-database-compat.js"></script>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --card-bg: #fff;
+      --text: #222;
+      --subtext: #666;
+      --shadow: rgba(0, 0, 0, 0.1);
+      --btn-bg: #007bff;
+      --btn-text: white;
+    }
+    body.dark {
+      --bg: #1e1e1e;
+      --card-bg: #2b2b2b;
+      --text: #eaeaea;
+      --subtext: #aaa;
+      --shadow: rgba(255, 255, 255, 0.05);
+      --btn-bg: #0d6efd;
+      --btn-text: #fff;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 20px;
+      text-align: center;
+      transition: background-color 0.3s, color 0.3s;
+    }
+    h1 {
+      margin-bottom: 30px;
+    }
+    .value-cards {
+      display: flex;
+      justify-content: center;
+      gap: 50px;
+      margin-bottom: 30px;
+      flex-wrap: wrap;
+    }
+    .card {
+      background: var(--card-bg);
+      padding: 20px 40px;
+      border-radius: 15px;
+      box-shadow: 0 4px 12px var(--shadow);
+      min-width: 150px;
+      flex: 1 1 150px;
+      max-width: 250px;
+    }
+    .label {
+      font-size: 1.2em;
+      color: var(--subtext);
+    }
+    .value {
+      font-size: 2.5em;
+      margin-top: 10px;
+      font-weight: bold;
+    }
+    .chart-container {
+      width: 90vw;
+      max-width: 900px;
+      margin: 0 auto 40px;
+    }
+    canvas {
+      width: 100% !important;
+      height: 400px !important;
+      background: var(--card-bg);
+      border-radius: 10px;
+      box-shadow: 0 2px 10px var(--shadow);
+      padding: 10px;
+    }
+    .buttons {
+      margin-bottom: 20px;
+    }
+    button {
+      font-size: 1em;
+      padding: 12px 25px;
+      margin: 8px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      background-color: var(--btn-bg);
+      color: var(--btn-text);
+      box-shadow: 0 4px 6px rgba(0, 123, 255, 0.4);
+      transition: background-color 0.3s;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    #statusMsg {
+      font-size: 1.1em;
+      margin-top: 15px;
+      min-height: 1.5em;
+      font-weight: 600;
+    }
+    #themeToggle {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: transparent;
+      border: 2px solid var(--btn-bg);
+      color: var(--btn-bg);
+      border-radius: 25px;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-weight: bold;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>🌐 Real-Time Sensor Dashboard & Control</h1>
+
+  <button id="themeToggle">🌙 Dark Mode</button>
+  
+  <div id="userStatus" style="position: fixed; top: 20px; left: 20px; font-weight: bold;"></div>
+  
+  <div style="position: fixed; top: 50px; left: 30px; font-weight: bold;" id="timer">
+  🕓login time: 0:00 minutes
+  </div>
+
+  <div class="value-cards">
+    <div class="card">
+      <div class="label">💧 Dissolved Oxygen (DO)</div>
+      <div class="value" id="doValue">-- μg/L</div>
+    </div>
+    <div class="card">
+      <div class="label">🌡️ Temperature</div>
+      <div class="value" id="tempValue">-- °C</div>
+    </div>
+  </div>
+
+  <div class="chart-container">
+    <canvas id="doChart"></canvas>
+  </div>
+
+  <div class="chart-container">
+    <canvas id="tempChart"></canvas>
+  </div>
+
+  <div class="buttons">
+    <button onclick="sendCommand('all')">Run All</button>
+    <button onclick="sendCommand('wash')">Wash</button>
+    <button onclick="sendCommand('wipe')">Wipe</button>
+    <button onclick="sendCommand('reset')">Reset</button>
+  </div>
+
+  <div id="statusMsg">Idle</div>
+
+  <script>
+    
+    // 🔥 แทนที่ค่านี้ด้วย Firebase Config ของคุณเอง
+    const firebaseConfig = {
+  apiKey: "AIzaSyCahNGt0dOFJCmUw5MrmulZG1VsKIpt-F0",
+  authDomain: "amutestv03.firebaseapp.com",
+  databaseURL: "https://amutestv03-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "amutestv03",
+  storageBucket: "amutestv03.firebasestorage.app",
+  messagingSenderId: "879107687622",
+  appId: "1:879107687622:web:ad0227a11bf8aa21ff43c7",
+  measurementId: "G-37ETDELEFH"
+};
+ firebase.initializeApp(firebaseConfig);   
+ firebase.auth().onAuthStateChanged((user) => {
+  const userStatusEl = document.getElementById("userStatus");
+  if (user) {
+    const uid = user.uid;
+    firebase.database().ref(`users/${uid}/roles`).once("value")
+      .then(snapshot => {
+        const role = snapshot.val();
+        if (role === "admin") {
+          userStatusEl.textContent = "👤 Admin";
+        } else {
+          userStatusEl.textContent = "👤 User";
+        }
+      })
+      .catch(err => {
+        console.error("Error getting role:", err);
+        userStatusEl.textContent = "❓ Unknown Role";
+      });
+  } else {
+    window.location.href = "/index.html";
+  }
+});
+
+      function logout() {
+    firebase.auth().signOut().then(() => {
+      window.location.href = "/index.html";
+    });
+  }
+  
+    const db = firebase.database();
+
+    let updateInterval = 5000;
+    let updateTimer = null;
+    let stopTimer = null;
+    let secondsPassed = 0;
+
+    const doLabels = [], doData = [], tempLabels = [], tempData = [];
+
+    const doCtx = document.getElementById('doChart').getContext('2d');
+    const tempCtx = document.getElementById('tempChart').getContext('2d');
+
+    const doChart = new Chart(doCtx, {
+      type: 'line',
+      data: {
+        labels: doLabels,
+        datasets: [{
+          label: 'DO (μg/L)',
+          data: doData,
+          borderColor: 'rgba(255, 99, 132, 1)',
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          fill: false,
+          pointRadius: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        animation: { duration: 0 },
+        scales: {
+          y: {
+            min: 0,
+            max: 12000,
+            ticks: {
+              stepSize: 500,
+              callback: val => val.toLocaleString()
+            },
+            grid: { color: 'rgba(180,180,180,0.2)' }
+          }
+        },
+        plugins: { legend: { display: true } }
+      }
+    });
+
+    const tempChart = new Chart(tempCtx, {
+      type: 'line',
+      data: {
+        labels: tempLabels,
+        datasets: [{
+          label: 'Temperature (°C)',
+          data: tempData,
+          borderColor: 'rgba(0, 123, 255, 1)',
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          fill: false,
+          pointRadius: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        animation: { duration: 0 },
+        scales: {
+          y: {
+            min: 0,
+            max: 100,
+            ticks: { stepSize: 10 },
+            grid: { color: 'rgba(180,180,180,0.2)' }
+          }
+        },
+        plugins: { legend: { display: true } }
+      }
+    });
+
+    function updateData() {
+      db.ref("sensor/do").once("value").then(snapshot => {
+        const val = snapshot.val();
+        if (val !== null) {
+          document.getElementById("doValue").textContent = `${val} μg/L`;
+          const now = new Date().toLocaleTimeString();
+          doLabels.push(now);
+          doData.push(val);
+          if (doLabels.length > 20) { doLabels.shift(); doData.shift(); }
+          doChart.update('none');
+        }
+      });
+      db.ref("sensor/temp").once("value").then(snapshot => {
+        const val = snapshot.val();
+        if (val !== null) {
+          document.getElementById("tempValue").textContent = `${val} °C`;
+          const now = new Date().toLocaleTimeString();
+          tempLabels.push(now);
+          tempData.push(val);
+          if (tempLabels.length > 20) { tempLabels.shift(); tempData.shift(); }
+          tempChart.update('none');
+        }
+      });
+    }
+
+    function startUpdating() {
+      if (!updateTimer) {
+        updateData();
+        updateTimer = setInterval(updateData, updateInterval);
+      }
+    }
+
+    function stopUpdating() {
+      if (updateTimer) {
+        clearInterval(updateTimer);
+        updateTimer = null;
+      }
+    }
+    
+    function listenRealtimeData() {
+      firebase.database().ref("realtime").on("value", snapshot => {
+        const data = snapshot.val();
+        if (data) {
+          const now = new Date().toLocaleTimeString();
+          updateChart(now, data.DO, data.Temp);
+        }
+      });
+    }
+
+
+    function sendCommand(cmd) {
+  const user = firebase.auth().currentUser;
+  const timestamp = new Date().toLocaleString();
+
+  // บันทึก Activity Log
+  db.ref("logs").push({
+    displayName: user.displayName || "guest",
+    command: cmd,
+    time: timestamp
+  });
+
+  // ส่งคำสั่งไปที่ Firebase
+  db.ref("command").set(cmd);
+  
+  document.getElementById("statusMsg").textContent = "Working...";
+
+  if (cmd === "all") {
+    startUpdating(); // เริ่มอัปเดตกราฟ
+  } else {
+    stopUpdating();  // หยุดอัปเดตก่อน กรณี wash/wipe/reset
+  }
+
+  // รอฟังสถานะเสร็จสิ้นจาก ESP32
+  const statusRef = db.ref("status");
+  statusRef.on("value", snapshot => {
+    const status = snapshot.val();
+    if (status === "done") {
+      document.getElementById("statusMsg").textContent = "Completed ✅";
+      stopUpdating(); // หยุดกราฟเมื่อเสร็จ
+      statusRef.off(); // ยกเลิกการฟังค่าต่อ
+    }
+  });
+}
+    
+    db.ref("command").on("value", snapshot => {
+      const cmd = snapshot.val();
+      const statusMsg = document.getElementById("statusMsg");
+      switch (cmd) {
+        case "all":
+          statusMsg.textContent = "Running All...";
+          startUpdating();
+          break;
+        case "wash":
+          statusMsg.textContent = "Washing...";
+          stopUpdating();
+          break;
+        case "wipe":
+          statusMsg.textContent = "Wiping...";
+          stopUpdating();
+          break;
+        case "reset":
+          statusMsg.textContent = "Resetting...";
+          stopUpdating();
+          break;
+        case "idle":
+        default:
+          statusMsg.textContent = "Idle";
+          stopUpdating();
+          break;
+      }
+    });
+    
+    document.getElementById("themeToggle").addEventListener("click", () => {
+      document.body.classList.toggle("dark");
+      const isDark = document.body.classList.contains("dark");
+      document.getElementById("themeToggle").textContent = isDark
+        ? "☀️ Light Mode"
+        : "🌙 Dark Mode";  
+    });
+    
+  let loginSeconds = 0;
+  setInterval(() => {
+  secondsPassed++;
+  const min = Math.floor(secondsPassed / 60);
+  const sec = secondsPassed % 60;
+  document.getElementById("timer").textContent = `🕓login time: ${min}:${sec.toString().padStart(2, '0')} minutes`; 
+}, 1000);
+
+    
+  </script>
+
+</body>
+</html>
